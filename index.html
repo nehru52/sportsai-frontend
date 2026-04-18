@@ -38,10 +38,6 @@
             background: #f8f9ff;
             border-color: #764ba2;
         }
-        .upload-area.dragover {
-            background: #e8ecff;
-            border-color: #764ba2;
-        }
         input[type="file"] { display: none; }
         .btn {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -64,7 +60,6 @@
         .status.processing { background: #fff3cd; color: #856404; display: block; }
         .status.done { background: #d4edda; color: #155724; display: block; }
         .status.error { background: #f8d7da; color: #721c24; display: block; }
-        #videoPreview { max-width: 100%; margin-top: 20px; border-radius: 10px; display: none; }
         .progress-bar {
             width: 100%;
             height: 10px;
@@ -94,8 +89,6 @@
         </div>
         <input type="file" id="fileInput" accept="video/*">
         
-        <video id="videoPreview" controls></video>
-        
         <button class="btn" id="uploadBtn" disabled>Upload & Analyze</button>
         
         <div class="progress-bar" id="progressBar">
@@ -106,13 +99,11 @@
     </div>
 
     <script>
-        // ⚠️ REPLACE THIS WITH YOUR ACTUAL RENDER URL
-        const API_URL = "https://sportsai-api-y7wg.onrender.com";  // <-- CHANGE THIS
+        const API_URL = "https://sportsai-api-y7wg.onrender.com";
         
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const uploadBtn = document.getElementById('uploadBtn');
-        const videoPreview = document.getElementById('videoPreview');
         const status = document.getElementById('status');
         const progressBar = document.getElementById('progressBar');
         const progressFill = document.getElementById('progressFill');
@@ -120,36 +111,85 @@
         let selectedFile = null;
         let jobId = null;
 
-        // Drag & drop handlers
         uploadArea.addEventListener('click', () => fileInput.click());
-        uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-        uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            handleFile(e.dataTransfer.files[0]);
-        });
         
-        fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
-
-        function handleFile(file) {
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
             if (!file) return;
-            if (!file.type.startsWith('video/')) {
-                showStatus('Please select a video file', 'error');
-                return;
-            }
             selectedFile = file;
             uploadBtn.disabled = false;
-            
-            // Preview
-            const url = URL.createObjectURL(file);
-            videoPreview.src = url;
-            videoPreview.style.display = 'block';
-            
             uploadArea.innerHTML = `<p>📹 ${file.name}</p><p style="font-size: 12px; color: #666;">${(file.size/1024/1024).toFixed(2)} MB</p>`;
+        });
+
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+            
+            uploadBtn.disabled = true;
+            showStatus('Getting upload URL...', 'processing');
+            
+            try {
+                const response = await fetch(`${API_URL}/upload?filename=${encodeURIComponent(selectedFile.name)}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Failed to get upload URL');
+                
+                const data = await response.json();
+                jobId = data.jobId;
+                
+                showStatus('Uploading video...', 'processing');
+                progressBar.classList.add('active');
+                
+                const xhr = new XMLHttpRequest();
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        progressFill.style.width = (e.loaded / e.total * 100) + '%';
+                    }
+                });
+                
+                await new Promise((resolve, reject) => {
+                    xhr.open('PUT', data.uploadUrl);
+                    xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error('Upload failed'));
+                    xhr.onerror = () => reject(new Error('Upload failed'));
+                    xhr.send(selectedFile);
+                });
+                
+                showStatus('Uploaded! Processing with AI... (2-5 minutes)', 'processing');
+                progressBar.classList.remove('active');
+                
+                pollStatus();
+                
+            } catch (err) {
+                showStatus('Error: ' + err.message, 'error');
+                uploadBtn.disabled = false;
+            }
+        });
+
+        async function pollStatus() {
+            const check = async () => {
+                try {
+                    const res = await fetch(`${API_URL}/status/${jobId}`);
+                    const data = await res.json();
+                    
+                    if (data.status === 'completed') {
+                        showStatus('✅ Done! <a href="' + data.output + '" target="_blank">View Results</a>', 'done');
+                    } else if (data.status === 'error') {
+                        showStatus('❌ Failed: ' + (data.error || 'Unknown'), 'error');
+                    } else {
+                        showStatus(`⏳ ${data.status}...`, 'processing');
+                        setTimeout(check, 3000);
+                    }
+                } catch (err) {
+                    showStatus('Error checking: ' + err.message, 'error');
+                }
+            };
+            check();
         }
 
-        uploadBtn.addEventListener('click
+        function showStatus(msg, type) {
+            status.innerHTML = msg;
+            status.className = 'status ' + type;
+        }
+    </script>
+</body>
+</html>
